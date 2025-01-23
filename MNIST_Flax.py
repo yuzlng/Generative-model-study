@@ -86,3 +86,92 @@ nnx.display(optimizer)
 
 
 ##### 5. Define training step functions #####
+def loss_fn(model: CNN, batch):
+    logits = model(batch['image'])
+    loss = optax.softmax_cross_entropy_with_integer_labels(
+        logits=logits, labels=batch['label']
+    ).mean()  # 예측값(logits)과 실제 레이블(labels) 간의 교차 엔트로피 손실을 계산
+    return loss, logits
+
+@nnx.jit
+def train_step(model: CNN, optimizer: nnx.Optimizer, metrics: nnx.MultiMetric,batch):
+   """Train for a single step."""
+   grad_fn = nnx.value_and_grad(loss_fn, has_aux=True)  # loss_fn의 출력값과 기울기를 동시에 계산, has_aux=True : 손실 외의 추가 출력값(로짓)을 반환
+   (loss, logits), grads = grad_fn(model, batch)
+   metrics.update(loss=loss, logits=logits, labels=batch['label'])  # 성능 지표(metrics)를 업데이트
+   optimizer.update(grads)  # model parameter 업데이트 
+
+@nnx.jit
+def eval_step(model: CNN, metrics: nnx.MultiMetric, batch):
+    loss, logits = loss_fn(model, batch)
+    metrics.update(loss=loss, logits=logits, labels=batch['label']) # In-place updates
+
+
+
+
+##### 6. Train and evaluate the model #####
+from IPython.display import clear_output
+import matplotlib.pyplot as plt
+
+metrics_history = { # 성능 기록용 딕셔너리
+  'train_loss': [],
+  'train_accuracy': [],
+  'test_loss': [],
+  'test_accuracy': [],
+}
+
+for step, batch in enumerate(train_ds.as_numpy_iterator()):
+  # Run the optimization for one step and make a stateful update to the following:
+  # - The train state's model parameters
+  # - The optimizer state
+  # - The training loss and accuracy batch metrics
+  train_step(model, optimizer, metrics, batch)
+
+  if step > 0 and (step % eval_every == 0 or step == train_steps - 1):  # one epoch 마다 
+    # Log the training metrics.
+    for metric, value in metrics.compute().items():  
+      metrics_history[f'train_{metric}'].append(value)  
+    metrics.reset()  
+
+    # Compute the metrics on the test set after each training epoch.
+    for test_batch in test_ds.as_numpy_iterator():
+      eval_step(model, metrics, test_batch)
+
+    # Log the test metrics.
+    for metric, value in metrics.compute().items():
+      metrics_history[f'test_{metric}'].append(value)
+    metrics.reset()  
+    
+
+    # 결과 시각화
+    clear_output(wait=True)    
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
+    ax1.set_title('Loss')
+    ax2.set_title('Accuracy')
+    for dataset in ('train', 'test'):
+      ax1.plot(metrics_history[f'{dataset}_loss'], label=f'{dataset}_loss')
+      ax2.plot(metrics_history[f'{dataset}_accuracy'], label=f'{dataset}_accuracy')
+    ax1.legend()
+    ax2.legend()
+    plt.show()
+
+
+
+
+
+##### 7. Perform inference on the test set #####
+model.eval() # evalution mode로 switch
+
+@nnx.jit
+def pred_step(model: CNN, batch):
+  logits = model(batch['image'])
+  return logits.argmax(axis=1)
+
+test_batch = test_ds.as_numpy_iterator().next()
+pred = pred_step(model, test_batch)
+
+fig, axs = plt.subplots(5, 5, figsize=(12, 12))
+for i, ax in enumerate(axs.flatten()):
+  ax.imshow(test_batch['image'][i, ..., 0], cmap='gray')
+  ax.set_title(f'label={pred[i]}')
+  ax.axis('off')
