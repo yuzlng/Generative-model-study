@@ -80,7 +80,7 @@ metrics = nnx.MultiMetric(  #성능지표 정의
 )
 
 # Optimizer의 설정 및 상태를 확인
-nnx.display(optimizer)
+# nnx.display(optimizer)
 
 
 
